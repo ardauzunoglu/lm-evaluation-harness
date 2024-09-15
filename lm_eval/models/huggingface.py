@@ -35,7 +35,7 @@ from lm_eval.models.utils import (
     pad_and_concat,
     stop_sequences_criteria,
 )
-
+import torch
 
 eval_logger = utils.eval_logger
 
@@ -448,16 +448,7 @@ class HFLM(TemplateLM):
         Helper method during initialization.
         Determines the backend ("causal" (decoder-only) or "seq2seq" (encoder-decoder))
         model type to be used.
-        sets `self.AUTO_MODEL_CLASS` appropriately if not already set.
         """
-        # escape hatch: if we're using a subclass that shouldn't follow
-        # the default _get_backend logic,
-        # then skip over the method.
-        # TODO: this seems very much undesirable in some cases--our code in HFLM
-        # references AutoModelForCausalLM at times to check for equality
-        if self.AUTO_MODEL_CLASS is not None:
-            return
-
         assert backend in ["default", "causal", "seq2seq"]
 
         if backend != "default":
@@ -1135,6 +1126,8 @@ class HFLM(TemplateLM):
                 )
                 logits = self._select_cont_toks(logits, contlen=contlen, inplen=ctx_len)
                 logits = logits.unsqueeze(0)  # [1, seq, vocab]
+                logits_avg = logits.mean(dim=1)
+                normalized_logits = torch.nn.functional.softmax(logits_avg, dim=-1)
 
                 # Check if per-token argmax is exactly equal to continuation
                 greedy_tokens = logits.argmax(dim=-1)
@@ -1162,8 +1155,7 @@ class HFLM(TemplateLM):
                     )  # [1, seq]
 
                     # Answer: (log prob, is-exact-match)
-                    answer = (float(logits.sum()), bool(max_equal))
-
+                    answer = (float(logits.sum()), bool(max_equal), normalized_logits.cpu().numpy().tolist())
                     res.append(answer)
 
                     if request_str is not None:

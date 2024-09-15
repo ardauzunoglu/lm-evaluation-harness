@@ -5,9 +5,12 @@ import random
 import time
 from collections import defaultdict
 from typing import TYPE_CHECKING, List, Optional, Union
+from tqdm import tqdm
 
 import numpy as np
 import torch
+import faiss
+import faiss.contrib.torch_utils
 
 import lm_eval.api.metrics
 import lm_eval.api.registry
@@ -414,28 +417,8 @@ def evaluate(
             for task_output in eval_tasks
         ):
             raise ValueError("log_samples must be True for 'bypass' metric-only tasks")
-
-    # validation check: are we running multimodal task <-> non-multimodal model class, or vice-versa.
-    incompatible_tasks = []
     for task_output in eval_tasks:
         task: Task = task_output.task
-
-        if getattr(lm, "MULTIMODAL", False) != getattr(task, "MULTIMODAL", False):
-            incompatible_tasks.append(task_output.task_name)
-    if len(incompatible_tasks) > 0:
-        if not getattr(lm, "MULTIMODAL", False):
-            raise ValueError(
-                f"Attempted to run tasks: {incompatible_tasks} which require multimodal input, but the selected model type does not currently implement this. Multimodal support is currently restricted to the ['hf-multimodal', 'vllm-vlm'] model type."
-            )
-        else:
-            raise ValueError(
-                f"Attempted to run tasks: {incompatible_tasks} which are text-only, but used a model type which only currently supports multimodal tasks."
-            )
-    # end multimodality validation check
-
-    for task_output in eval_tasks:
-        task: Task = task_output.task
-
         limit = get_sample_size(task, limit)
         task.build_all_requests(
             limit=limit,
@@ -508,6 +491,8 @@ def evaluate(
     # TODO: del model here, maybe (idea: allow user to specify device of e.g. reward model separately)
     for task_output in eval_tasks:
         task = task_output.task
+        f = open("aaa.json", "w")
+        to_save = []
         task.apply_filters()
 
         ### Collect values of metrics on all datapoints ###
@@ -525,11 +510,24 @@ def evaluate(
             doc_iterator = task.doc_iterator(
                 rank=RANK, limit=limit, world_size=WORLD_SIZE
             )
+            
+            i = 0
             for doc_id, doc in doc_iterator:
                 requests = instances_by_doc_id[doc_id]
                 metrics = task.process_results(
                     doc, [req.filtered_resps[filter_key] for req in requests]
                 )
+                
+                doc["answers"] = [req.filtered_resps[filter_key][:-1] for req in requests]
+                if task_output.task.task_name == "piqa":
+                    doc["dist_of_correct"] = [req.filtered_resps[filter_key] for req in requests][doc["label"]][-1]
+                elif (task_output.task.task_name == "arc_challenge") or (task_output.task.task_name == "arc_easy") or (task_output.task.task_name == "arc"):
+                    doc["dist_of_correct"] = [req.filtered_resps[filter_key] for req in requests][doc["choices"]["label"].index(doc["answerKey"])][-1]
+                elif (task_output.task.task_name == "winogrande"):
+                    doc["dist_of_correct"] = [req.filtered_resps[filter_key] for req in requests][int(doc["answer"])-1][-1]
+
+                to_save.append(doc)
+                
                 if log_samples:
                     target = task.doc_to_target(doc)
                     example = {
@@ -554,8 +552,59 @@ def evaluate(
                     }
                     example.update(metrics)
                     task_output.logged_samples.append(example)
+            
                 for metric, value in metrics.items():
+                    to_save[i][metric] = value
                     task_output.sample_metrics[(metric, filter_key)].append(value)
+                i += 1
+
+        indices_to_remove = []
+        all_logits = torch.stack([torch.tensor(to_save[j]["dist_of_correct"]) for j in range(len(to_save))])
+        all_logits = all_logits.reshape((all_logits.shape[0], all_logits.shape[2]))
+        d = all_logits.shape[1]
+        index = faiss.IndexFlatIP(d)
+        index.add(all_logits)
+
+        def get_index(l):
+            D, I = index.search(l, 30)
+            return [ind for ind in I[0]]
+        
+        cos = torch.nn.CosineSimilarity(dim=0) 
+
+        for k in tqdm(range(len(to_save))):
+            if k not in indices_to_remove:
+                l = torch.tensor(to_save[k]["dist_of_correct"])
+                similar_logit_indices = get_index(l)[1:]
+                cos_sims = [float(cos(l.reshape((l.shape[1])), all_logits[ind])) for ind in similar_logit_indices]
+                
+                print(cos_sims, flush=True)
+                print(indices_to_remove)
+                combined = list(zip(similar_logit_indices, cos_sims))
+                sorted_combined = sorted(combined, key=lambda x: x[0])
+            
+                for idx, cos_sim in sorted_combined:
+                    if (cos_sim > 0.7) and (idx not in indices_to_remove):
+                        indices_to_remove.append(int(idx)) 
+
+        total_score_acc = 0
+        total_score_acc_norm = 0
+        for k in range(len(to_save)):
+            if k in indices_to_remove:
+                continue
+
+            if "acc" in to_save[k].keys():
+                total_score_acc += to_save[k]["acc"]
+            if "acc_norm" in to_save[k].keys():
+                total_score_acc_norm += to_save[k]["acc_norm"]
+
+        indices_to_remove = list(set(indices_to_remove))
+
+        print(total_score_acc, total_score_acc_norm)
+        print(len(to_save), (len(indices_to_remove)))
+        print("Filtered Accuracy:" + str(float(total_score_acc/(len(to_save)-len(indices_to_remove)))), flush=True)
+        print("Filtered Accuracy Normalized:" + str(float(total_score_acc_norm/(len(to_save)-len(indices_to_remove)))), flush=True)
+
+        #json.dump(to_save, f, indent=2, ensure_ascii=False)
 
     if WORLD_SIZE > 1:
         # if multigpu, then gather data across all ranks to rank 0
