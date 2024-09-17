@@ -564,8 +564,8 @@ def evaluate(
         index = faiss.IndexFlatIP(d)
         index.add(all_logits)
 
-        def get_index(l):
-            D, I = index.search(l, 30)
+        def get_index(l, k):
+            D, I = index.search(l, k)
             return [ind for ind in I[0]]
         
         cos = torch.nn.CosineSimilarity(dim=0) 
@@ -573,15 +573,13 @@ def evaluate(
         for k in tqdm(range(len(to_save))):
             if k not in indices_to_remove:
                 l = torch.tensor(to_save[k]["dist_of_correct"])
-                similar_logit_indices = get_index(l)[1:]
+                similar_logit_indices = get_index(l, k=len(to_save))
                 cos_sims = [float(cos(l.reshape((l.shape[1])), all_logits[ind])) for ind in similar_logit_indices]
 
                 combined = list(zip(similar_logit_indices, cos_sims))
                 sorted_combined = sorted(combined, key=lambda x: x[1], reverse=True)
                 for idx, cos_sim in sorted_combined:
-                    print(float(1), float(idx), float(cos_sim))
-                    if (float(cos_sim) > 0.2) and (int(idx) not in indices_to_remove):
-                        print(2, cos_sim, float(idx))
+                    if (float(cos_sim) > 0.9) and (int(idx) not in indices_to_remove) and (int(idx) != int(k)):
                         indices_to_remove.append(int(idx)) 
 
         total_score_acc = 0
