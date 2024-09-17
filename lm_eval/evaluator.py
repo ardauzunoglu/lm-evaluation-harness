@@ -477,7 +477,6 @@ def evaluate(
 
         # run requests through model
         resps = getattr(lm, reqtype)(cloned_reqs)
-
         # put responses from model into a list of length K for each request.
         for x, req in zip(resps, cloned_reqs):
             req.resps.append(x)
@@ -576,14 +575,13 @@ def evaluate(
                 l = torch.tensor(to_save[k]["dist_of_correct"])
                 similar_logit_indices = get_index(l)[1:]
                 cos_sims = [float(cos(l.reshape((l.shape[1])), all_logits[ind])) for ind in similar_logit_indices]
-                
-                print(cos_sims, flush=True)
-                print(indices_to_remove)
+
                 combined = list(zip(similar_logit_indices, cos_sims))
-                sorted_combined = sorted(combined, key=lambda x: x[0])
-            
+                sorted_combined = sorted(combined, key=lambda x: x[1], reverse=True)
                 for idx, cos_sim in sorted_combined:
-                    if (cos_sim > 0.7) and (idx not in indices_to_remove):
+                    print(float(1), float(idx), float(cos_sim))
+                    if (float(cos_sim) > 0.2) and (int(idx) not in indices_to_remove):
+                        print(2, cos_sim, float(idx))
                         indices_to_remove.append(int(idx)) 
 
         total_score_acc = 0
