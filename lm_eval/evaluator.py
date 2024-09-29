@@ -632,9 +632,9 @@ def evaluate(
 
         sanity_check = {}
         today = date.today()
-        directory = "results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"/"
+        directory = "int_results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"/"
         os.makedirs(directory, exist_ok=True)
-        f = open("results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"/"+"sanity_check.json", "w")
+        f = open("int_results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"/"+"sanity_check.json", "w")
         indices_to_remove1 = []
         indices_to_remove2 = []
         indices_to_remove3 = []
@@ -644,7 +644,7 @@ def evaluate(
         res = faiss.StandardGpuResources()
         d = all_logits.shape[1]
         cpu_index = faiss.IndexFlatIP(d)
-        index = faiss.index_cpu_to_gpu(res, 0, cpu_index)
+        index = faiss.index_cpu_to_all_gpus(cpu_index)  
         index.add(all_logits.cpu().numpy())
 
         def get_index(l, k):
@@ -674,11 +674,12 @@ def evaluate(
                 question_k = to_save[k]["text"]
             
             sanity_check[question_k] = {"f1":[], "f2":[], "f3":[]}
-            similar_logit_indices = get_index(l, k=100)
+            similar_logit_indices = get_index(l, k=1000)
             cos_sims = [float(cos(l.reshape((l.shape[1])), all_logits[ind])) for ind in similar_logit_indices]
 
             combined = list(zip(similar_logit_indices, cos_sims))
             sorted_combined = sorted(combined, key=lambda x: x[1], reverse=True)
+            counter = 0
             for idx, cos_sim in sorted_combined:
                 #correct_answer_idx = to_save[idx]["correct_answer"]
                 if task_output.task.task_name == "piqa":
@@ -700,12 +701,12 @@ def evaluate(
                 
                 jac = jaccard_similarity(generate_ngrams(question_k, 1), generate_ngrams(question_idx, 1))
                 q_cos_sim = float(question_similarity_matrix[k, idx])
-                if k not in indices_to_remove1:
+                if (k not in indices_to_remove1) and (counter < 100):
                     if (int(idx) not in indices_to_remove1) and (int(idx) != int(k)) and (jac > 0.2) and (float(cos_sim) > 0.9):
                         indices_to_remove1.append(int(idx)) 
                         sanity_check[question_k]["f1"].append(question_idx)
                         
-                if k not in indices_to_remove2:
+                if (k not in indices_to_remove2)  and (counter < 500):
                     if (int(idx) not in indices_to_remove2) and (int(idx) != int(k)) and (jac > 0.2) and (float(cos_sim) > 0.8):
                         indices_to_remove2.append(int(idx)) 
                         sanity_check[question_k]["f2"].append(question_idx)
@@ -714,7 +715,9 @@ def evaluate(
                     if (int(idx) not in indices_to_remove3) and (int(idx) != int(k)) and (jac > 0.2) and (float(cos_sim) > 0.7):
                         indices_to_remove3.append(int(idx)) 
                         sanity_check[question_k]["f3"].append(question_idx)
-             
+
+                counter += 1
+
         total_score_acc1 = 0
         total_score_acc_norm1 = 0
         for k in range(len(to_save)):
@@ -764,7 +767,10 @@ def evaluate(
         
         counter = 0 
         for emb in [all_embeddings, all_embeddings_f1, all_embeddings_f2, all_embeddings_f3]:
-            tsne = TSNE(n_components=2, random_state=42, perplexity=30, n_iter=5000)
+            if len(emb) > 30:
+                tsne = TSNE(n_components=2, random_state=42, perplexity=30, n_iter=5000)
+            else:
+                tsne = TSNE(n_components=2, random_state=42, perplexity=len(emb), n_iter=5000)
             emb = torch.tensor(emb).cpu()
             data_2d = tsne.fit_transform(emb)
             k = 5
@@ -787,7 +793,7 @@ def evaluate(
             plt.xlabel('t-SNE Component 1')
             plt.ylabel('t-SNE Component 2')
             plt.colorbar(scatter, ticks=range(n_clusters), label='Cluster Label')  # Color bar for cluster labels
-            plt.savefig("results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"/"+str(counter)+".png", dpi=300, bbox_inches='tight')
+            plt.savefig("int_results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"/"+str(counter)+"clustering.png", dpi=300, bbox_inches='tight')
             counter += 1
 
     if WORLD_SIZE > 1:
