@@ -516,6 +516,7 @@ def evaluate(
     ### Postprocess outputs ###
     # TODO: del model here, maybe (idea: allow user to specify device of e.g. reward model separately)
     for task_output in eval_tasks:
+        start_time = time.time()
         task = task_output.task
         to_save = []
         task.apply_filters()
@@ -606,9 +607,9 @@ def evaluate(
 
         st_model = SentenceTransformer("all-MiniLM-L6-v2")
         logging.getLogger('sentence_transformers').setLevel(logging.WARNING)
-
-        print("ENCODING QUESTIONS", flush=True)
-        for k in tqdm(range(len(to_save))):
+        
+        questions = []
+        for k in range(len(to_save)):
             if task_output.task.task_name == "piqa":
                 question_k = to_save[k]["goal"]
             elif (task_output.task.task_name == "logiqa") or ("mmlu" in task_output.task.task_name) or (task_output.task.task_name == "truthfulqa_mc1") or (task_output.task.task_name == "boolq") or (task_output.task.task_name == "winogrande") or (task_output.task.task_name == "arc_easy") or (task_output.task.task_name == "arc_challenge") or (task_output.task.task_name == "social_iqa") or (task_output.task.task_name == "commonsense_qa"):
@@ -625,98 +626,82 @@ def evaluate(
                 question_k = to_save[k]["premise"]
             elif (task_output.task.task_name == "lambada_openai"):
                 question_k = to_save[k]["text"]
-            to_save[k]["question_embedding"] = st_model.encode(question_k)
-
-        all_question_embeddings = [to_save[i]["question_embedding"] for i in range(len(to_save))]
-        question_similarity_matrix = util.pytorch_cos_sim(all_question_embeddings, all_question_embeddings)
+            questions.append(question_k)
+        
+        question_embeddings = st_model.encode(questions)
+        print("ENCODING QUESTIONS", flush=True)
+        for k in tqdm(range(len(question_embeddings))):
+            to_save[k]["question_embedding"] = question_embeddings[k]
 
         sanity_check = {}
-        today = date.today()
-        directory = "int_results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"/"
-        os.makedirs(directory, exist_ok=True)
-        f = open("int_results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"/"+"sanity_check.json", "w")
+        if lm.revision == "main":
+            directory = "results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"/"
+            os.makedirs(directory, exist_ok=True)
+            f = open("results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"/"+"sanity_check.json", "w")
+        else:
+            directory = "results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"-"+lm.revision+"/"
+            os.makedirs(directory, exist_ok=True)
+            f = open("results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"-"+lm.revision+"/"+"sanity_check.json", "w")
+        all_question_embeddings = [to_save[i]["question_embedding"] for i in range(len(to_save))]
+        question_similarity_matrix = util.pytorch_cos_sim(all_question_embeddings, all_question_embeddings)
+        
+        all_logits = torch.stack([torch.tensor(to_save[j]["dist_of_correct"]) for j in range(len(to_save))]).to(lm.device)
+        all_logits = all_logits.reshape((all_logits.shape[0], all_logits.shape[2]))
+        logits_similarity_matrix = util.pytorch_cos_sim(all_logits, all_logits)
+
+        result_matrix1 = ((logits_similarity_matrix > 0.9) & (question_similarity_matrix > 0.2)).float()
+        result_matrix2 = ((logits_similarity_matrix > 0.8) & (question_similarity_matrix > 0.2)).float()
+        result_matrix3 = ((logits_similarity_matrix > 0.7) & (question_similarity_matrix > 0.2)).float()
+        result_matrix4 = ((logits_similarity_matrix > 0.6) & (question_similarity_matrix > 0.2)).float()
+        result_matrix5 = ((logits_similarity_matrix > 0.5) & (question_similarity_matrix > 0.2)).float()
+
         indices_to_remove1 = []
         indices_to_remove2 = []
         indices_to_remove3 = []
-        all_logits = torch.stack([torch.tensor(to_save[j]["dist_of_correct"]) for j in range(len(to_save))]).to(lm.device)
-        all_logits = all_logits.reshape((all_logits.shape[0], all_logits.shape[2]))
-
-        res = faiss.StandardGpuResources()
-        d = all_logits.shape[1]
-        cpu_index = faiss.IndexFlatIP(d)
-        index = faiss.index_cpu_to_all_gpus(cpu_index)  
-        index.add(all_logits.cpu().numpy())
-
-        def get_index(l, k):
-            D, I = index.search(l, k)
-            return [ind for ind in I[0]]
+        indices_to_remove4 = []
+        indices_to_remove5 = []
         
-        cos = torch.nn.CosineSimilarity(dim=0) 
+        for k in tqdm(range(len(to_save))):
+            sanity_check[questions[k]] = {"f1":[]}
+            for j in range(k+1, len(to_save)):
+                if (len(indices_to_remove1) <= int(len(to_save)*0.1)) and (k not in indices_to_remove1) and (j not in indices_to_remove1) and (result_matrix1[k, j] == 1):
+                    indices_to_remove1.append(j)
+                    sanity_check[questions[k]]["f1"].append(questions[j]) 
+
 
         for k in tqdm(range(len(to_save))):
-            l = torch.tensor(to_save[k]["dist_of_correct"]).to(lm.device)
-            #correct_answer_k = to_save[k]["correct_answer"]
-            if task_output.task.task_name == "piqa":
-                question_k = to_save[k]["goal"]
-            elif (task_output.task.task_name == "logiqa") or ("mmlu" in task_output.task.task_name) or (task_output.task.task_name == "truthfulqa_mc1") or (task_output.task.task_name == "boolq") or (task_output.task.task_name == "winogrande") or (task_output.task.task_name == "arc_easy") or (task_output.task.task_name == "arc_challenge") or (task_output.task.task_name == "social_iqa") or (task_output.task.task_name == "commonsense_qa"):
-                question_k = to_save[k]["question"]
-            elif (task_output.task.task_name == "openbookqa"):
-                question_k = to_save[k]["question_stem"]
-            elif (task_output.task.task_name == "hellaswag"):
-                question_k = to_save[k]["ctx"]
-            elif (task_output.task.task_name == "mathqa"):
-                question_k = to_save[k]["Problem"]
-            elif (task_output.task.task_name == "pubmedqa"):
-                question_k = to_save[k]["QUESTION"]
-            elif (task_output.task.task_name == "copa"):
-                question_k = to_save[k]["premise"]
-            elif (task_output.task.task_name == "lambada_openai"):
-                question_k = to_save[k]["text"]
-            
-            sanity_check[question_k] = {"f1":[], "f2":[], "f3":[]}
-            similar_logit_indices = get_index(l, k=1000)
-            cos_sims = [float(cos(l.reshape((l.shape[1])), all_logits[ind])) for ind in similar_logit_indices]
+            sanity_check[questions[k]]["f2"] = []
+            for j in range(k+1, len(to_save)):
+                if (len(indices_to_remove2) <= int(len(to_save)*0.25)) and (k not in indices_to_remove2) and (j not in indices_to_remove2) and (result_matrix2[k, j] == 1):
+                    indices_to_remove2.append(j)
+                    sanity_check[questions[k]]["f2"].append(questions[j]) 
 
-            combined = list(zip(similar_logit_indices, cos_sims))
-            sorted_combined = sorted(combined, key=lambda x: x[1], reverse=True)
-            counter = 0
-            for idx, cos_sim in sorted_combined:
-                #correct_answer_idx = to_save[idx]["correct_answer"]
-                if task_output.task.task_name == "piqa":
-                    question_idx = to_save[idx]["goal"]
-                elif (task_output.task.task_name == "logiqa") or ("mmlu" in task_output.task.task_name) or (task_output.task.task_name == "truthfulqa_mc1") or (task_output.task.task_name == "boolq") or (task_output.task.task_name == "winogrande") or (task_output.task.task_name == "arc_easy") or (task_output.task.task_name == "arc_challenge") or (task_output.task.task_name == "social_iqa") or (task_output.task.task_name == "commonsense_qa"):
-                    question_idx = to_save[idx]["question"]
-                elif (task_output.task.task_name == "openbookqa"):
-                    question_idx = to_save[idx]["question_stem"]
-                elif (task_output.task.task_name == "hellaswag"):
-                    question_idx = to_save[idx]["ctx"]
-                elif (task_output.task.task_name == "mathqa"):
-                    question_idx = to_save[idx]["Problem"]
-                elif (task_output.task.task_name == "pubmedqa"):
-                    question_idx = to_save[idx]["QUESTION"]
-                elif (task_output.task.task_name == "copa"):
-                    question_idx = to_save[idx]["premise"]
-                elif (task_output.task.task_name == "lambada_openai"):
-                    question_idx = to_save[idx]["text"]
-                
-                jac = jaccard_similarity(generate_ngrams(question_k, 1), generate_ngrams(question_idx, 1))
-                q_cos_sim = float(question_similarity_matrix[k, idx])
-                if (k not in indices_to_remove1) and (counter < 100):
-                    if (int(idx) not in indices_to_remove1) and (int(idx) != int(k)) and (jac > 0.2) and (float(cos_sim) > 0.9):
-                        indices_to_remove1.append(int(idx)) 
-                        sanity_check[question_k]["f1"].append(question_idx)
-                        
-                if (k not in indices_to_remove2)  and (counter < 500):
-                    if (int(idx) not in indices_to_remove2) and (int(idx) != int(k)) and (jac > 0.2) and (float(cos_sim) > 0.8):
-                        indices_to_remove2.append(int(idx)) 
-                        sanity_check[question_k]["f2"].append(question_idx)
+        for k in tqdm(range(len(to_save))):
+            sanity_check[questions[k]]["f3"] = []
+            for j in range(k+1, len(to_save)):
+                if (len(indices_to_remove3) <= int(len(to_save)*0.5)) and (k not in indices_to_remove3) and (j not in indices_to_remove3) and (result_matrix3[k, j] == 1):
+                    indices_to_remove3.append(j)
+                    sanity_check[questions[k]]["f3"].append(questions[j]) 
 
-                if k not in indices_to_remove3:
-                    if (int(idx) not in indices_to_remove3) and (int(idx) != int(k)) and (jac > 0.2) and (float(cos_sim) > 0.7):
-                        indices_to_remove3.append(int(idx)) 
-                        sanity_check[question_k]["f3"].append(question_idx)
+        for k in tqdm(range(len(to_save))):
+            sanity_check[questions[k]]["f4"] = []
+            for j in range(k+1, len(to_save)):
+                if (len(indices_to_remove4) <= int(len(to_save)*0.75)) and (k not in indices_to_remove4) and (j not in indices_to_remove4) and (result_matrix4[k, j] == 1):
+                    indices_to_remove4.append(j)
+                    sanity_check[questions[k]]["f4"].append(questions[j]) 
 
-                counter += 1
+        for k in tqdm(range(len(to_save))):
+            sanity_check[questions[k]]["f5"] = []
+            for j in range(k+1, len(to_save)):
+                if (len(indices_to_remove5) <= int(len(to_save)*0.9)) and (k not in indices_to_remove5) and (j not in indices_to_remove5) and (result_matrix5[k, j] == 1):
+                    indices_to_remove5.append(j)
+                    sanity_check[questions[k]]["f5"].append(questions[j]) 
+
+        indices_to_remove5 = list(set(indices_to_remove5))
+        indices_to_remove4 = list(set(indices_to_remove4))
+        indices_to_remove3 = list(set(indices_to_remove3))
+        indices_to_remove2 = list(set(indices_to_remove2))
+        indices_to_remove1 = list(set(indices_to_remove1))
 
         total_score_acc1 = 0
         total_score_acc_norm1 = 0
@@ -748,53 +733,93 @@ def evaluate(
             if "acc_norm" in to_save[k].keys():
                 total_score_acc_norm3 += to_save[k]["acc_norm"]
 
-        indices_to_remove3 = list(set(indices_to_remove3))
-        indices_to_remove2 = list(set(indices_to_remove2))
-        indices_to_remove1 = list(set(indices_to_remove1))
+        total_score_acc4 = 0
+        total_score_acc_norm4 = 0
+        for k in range(len(to_save)):
+            if k in indices_to_remove4:
+                continue
+            if "acc" in to_save[k].keys():
+                total_score_acc4 += to_save[k]["acc"]
+            if "acc_norm" in to_save[k].keys():
+                total_score_acc_norm4 += to_save[k]["acc_norm"]
 
-        print("MODEL: {}".format(lm._config.name_or_path))
+        total_score_acc5 = 0
+        total_score_acc_norm5 = 0
+        for k in range(len(to_save)):
+            if k in indices_to_remove5:
+                continue
+            if "acc" in to_save[k].keys():
+                total_score_acc5 += to_save[k]["acc"]
+            if "acc_norm" in to_save[k].keys():
+                total_score_acc_norm5 += to_save[k]["acc_norm"]
+
+        if lm.revision == "main":
+            print("MODEL: {}".format(lm._config.name_or_path))
+        else:
+            print("MODEL: {}".format(lm._config.name_or_path.split("/")[-1]+"-"+lm.revision))
         print("TASK: {}".format(task_output.task.task_name))
-        print("Filter Ratio (1,2,3):" + str(len(indices_to_remove1)/len(to_save)), str(len(indices_to_remove2)/len(to_save)), str(len(indices_to_remove3)/len(to_save)))
-        print("Filtered Accuracy (1,2,3):" + str(float(total_score_acc1/(len(to_save)-len(indices_to_remove1)))), str(float(total_score_acc2/(len(to_save)-len(indices_to_remove2)))), str(float(total_score_acc3/(len(to_save)-len(indices_to_remove3)))))
-        print("Filtered Accuracy Normalized (1,2,3):" + str(float(total_score_acc_norm1/(len(to_save)-len(indices_to_remove1)))), str(float(total_score_acc_norm2/(len(to_save)-len(indices_to_remove2)))), str(float(total_score_acc_norm3/(len(to_save)-len(indices_to_remove3)))))
-        print("="*50)
+        print("Filter Ratio (1,2,3,4,5):" + str(len(indices_to_remove1)/len(to_save)), str(len(indices_to_remove2)/len(to_save)), str(len(indices_to_remove3)/len(to_save)), str(len(indices_to_remove4)/len(to_save)), str(len(indices_to_remove5)/len(to_save)))
+        print("Filtered Accuracy (1,2,3,4,5):" + str(float(total_score_acc1/(len(to_save)-len(indices_to_remove1)))), str(float(total_score_acc2/(len(to_save)-len(indices_to_remove2)))), str(float(total_score_acc3/(len(to_save)-len(indices_to_remove3)))), str(float(total_score_acc4/(len(to_save)-len(indices_to_remove4)))), str(float(total_score_acc5/(len(to_save)-len(indices_to_remove5)))))
+        print("Filtered Accuracy Normalized (1,2,3,4,5):" + str(float(total_score_acc_norm1/(len(to_save)-len(indices_to_remove1)))), str(float(total_score_acc_norm2/(len(to_save)-len(indices_to_remove2)))), str(float(total_score_acc_norm3/(len(to_save)-len(indices_to_remove3)))), str(float(total_score_acc_norm4/(len(to_save)-len(indices_to_remove4)))), str(float(total_score_acc_norm5/(len(to_save)-len(indices_to_remove5)))))
         
         json.dump(sanity_check, f, indent=2, ensure_ascii=False)
         all_embeddings = [to_save[i]["question_embedding"] for i in range(len(to_save))]
         all_embeddings_f1 = [to_save[i]["question_embedding"] for i in range(len(to_save)) if i not in indices_to_remove1]
         all_embeddings_f2 = [to_save[i]["question_embedding"] for i in range(len(to_save)) if i not in indices_to_remove2]
         all_embeddings_f3 = [to_save[i]["question_embedding"] for i in range(len(to_save)) if i not in indices_to_remove3]
+        all_embeddings_f4 = [to_save[i]["question_embedding"] for i in range(len(to_save)) if i not in indices_to_remove4]
+        all_embeddings_f5 = [to_save[i]["question_embedding"] for i in range(len(to_save)) if i not in indices_to_remove5]
         
         counter = 0 
-        for emb in [all_embeddings, all_embeddings_f1, all_embeddings_f2, all_embeddings_f3]:
-            if len(emb) > 30:
-                tsne = TSNE(n_components=2, random_state=42, perplexity=30, n_iter=5000)
-            else:
-                tsne = TSNE(n_components=2, random_state=42, perplexity=len(emb), n_iter=5000)
-            emb = torch.tensor(emb).cpu()
-            data_2d = tsne.fit_transform(emb)
-            k = 5
-            n_clusters = int(len(to_save) / k) + 1
-            kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-            kmeans.fit(data_2d.astype(np.float64))
-            labels = kmeans.labels_ 
+        for emb in [all_embeddings, all_embeddings_f1, all_embeddings_f2, all_embeddings_f3, all_embeddings_f4, all_embeddings_f5]:
+            try:
+                if counter in [1, 2, 4]:
+                    counter += 1
+                    continue
+                if len(emb) > 30:
+                    tsne = TSNE(n_components=2, random_state=42, perplexity=30, n_iter=1000)
+                else:
+                    tsne = TSNE(n_components=2, random_state=42, perplexity=len(emb), n_iter=1000)
+                emb = torch.tensor(emb).cpu()
+                data_2d = tsne.fit_transform(emb)
+                k = 5
+                n_clusters = int(len(emb) / k) + 1
+                kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+                kmeans.fit(data_2d.astype(np.float64))
+                labels = kmeans.labels_ 
 
-            x_min, x_max = data_2d[:, 0].min() - 1, data_2d[:, 0].max() + 1
-            y_min, y_max = data_2d[:, 1].min() - 1, data_2d[:, 1].max() + 1
-            xx, yy = np.meshgrid(np.linspace(x_min, x_max, 100), np.linspace(y_min, y_max, 100))
+                x_min, x_max = data_2d[:, 0].min() - 1, data_2d[:, 0].max() + 1
+                y_min, y_max = data_2d[:, 1].min() - 1, data_2d[:, 1].max() + 1
+                xx, yy = np.meshgrid(np.linspace(x_min, x_max, 100), np.linspace(y_min, y_max, 100))
 
-            Z = kmeans.predict(np.c_[xx.ravel(), yy.ravel()].astype(np.float64))  # Ensure float64 type
-            Z = Z.reshape(xx.shape)
-            plt.figure(figsize=(10, 8))
-            plt.contourf(xx, yy, Z, alpha=0.5, cmap='viridis')  # Background color according to clustering
+                Z = kmeans.predict(np.c_[xx.ravel(), yy.ravel()].astype(np.float64))  # Ensure float64 type
+                Z = Z.reshape(xx.shape)
+                plt.figure(figsize=(10, 8))
+                plt.contourf(xx, yy, Z, alpha=0.5, cmap='viridis')  # Background color according to clustering
 
-            scatter = plt.scatter(data_2d[:, 0], data_2d[:, 1], c=labels, edgecolor='k', cmap='viridis', s=5)
-            plt.title('t-SNE with k-Means Clustering and Background')
-            plt.xlabel('t-SNE Component 1')
-            plt.ylabel('t-SNE Component 2')
-            plt.colorbar(scatter, ticks=range(n_clusters), label='Cluster Label')  # Color bar for cluster labels
-            plt.savefig("int_results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"/"+str(counter)+"clustering.png", dpi=300, bbox_inches='tight')
-            counter += 1
+                scatter = plt.scatter(data_2d[:, 0], data_2d[:, 1], c=labels, edgecolor='k', cmap='viridis', s=5)
+                plt.title('t-SNE with k-Means Clustering and Background')
+                plt.xlabel('t-SNE Component 1')
+                plt.ylabel('t-SNE Component 2')
+                plt.colorbar(scatter, ticks=range(n_clusters), label='Cluster Label')  # Color bar for cluster labels
+                if lm.revision == "main":
+                    plt.savefig("results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"/"+str(counter)+"clustering.png", dpi=300, bbox_inches='tight')
+                else:
+                    plt.savefig("results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"-"+lm.revision+"/"+str(counter)+"clustering.png", dpi=300, bbox_inches='tight')
+                counter += 1
+            except:
+                counter += 1
+                pass
+
+        end_time = time.time()
+        execution_time = end_time - start_time
+        
+        if lm.revision == "main":
+            print(f'Execution time for {task_output.task.task_name} + {lm._config.name_or_path.split("/")[-1]}: {execution_time:.6f} seconds', flush=True)
+        else:
+            print(f'Execution time for {task_output.task.task_name} + {lm._config.name_or_path.split("/")[-1]+"-"+lm.revision}: {execution_time:.6f} seconds', flush=True)
+            
+        print("="*50)
 
     if WORLD_SIZE > 1:
         # if multigpu, then gather data across all ranks to rank 0
