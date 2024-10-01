@@ -642,6 +642,7 @@ def evaluate(
             directory = "results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"-"+lm.revision+"/"
             os.makedirs(directory, exist_ok=True)
             f = open("results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"-"+lm.revision+"/"+"sanity_check.json", "w")
+        
         all_question_embeddings = [to_save[i]["question_embedding"] for i in range(len(to_save))]
         question_similarity_matrix = util.pytorch_cos_sim(all_question_embeddings, all_question_embeddings)
         
@@ -649,126 +650,136 @@ def evaluate(
         all_logits = all_logits.reshape((all_logits.shape[0], all_logits.shape[2]))
         logits_similarity_matrix = util.pytorch_cos_sim(all_logits, all_logits)
 
-        result_matrix1 = ((logits_similarity_matrix > 0.9) & (question_similarity_matrix > 0.2)).float()
-        result_matrix2 = ((logits_similarity_matrix > 0.8) & (question_similarity_matrix > 0.2)).float()
-        result_matrix3 = ((logits_similarity_matrix > 0.7) & (question_similarity_matrix > 0.2)).float()
-        result_matrix4 = ((logits_similarity_matrix > 0.6) & (question_similarity_matrix > 0.2)).float()
-        result_matrix5 = ((logits_similarity_matrix > 0.5) & (question_similarity_matrix > 0.2)).float()
-
-        indices_to_remove1 = []
-        indices_to_remove2 = []
-        indices_to_remove3 = []
-        indices_to_remove4 = []
-        indices_to_remove5 = []
+        result_matrix1 = ((logits_similarity_matrix > 0.95) & (question_similarity_matrix > 0.6)).float()
+        result_matrix2 = ((logits_similarity_matrix > 0.9) & (question_similarity_matrix > 0.5)).float()
+        result_matrix3 = ((logits_similarity_matrix > 0.85) & (question_similarity_matrix > 0.4)).float()
+        result_matrix4 = ((logits_similarity_matrix > 0.8) & (question_similarity_matrix > 0.35)).float()
+        result_matrix5 = ((logits_similarity_matrix > 0.75) & (question_similarity_matrix > 0.3)).float()
         
+        indices_to_remove1, indices_to_remove2, indices_to_remove3, indices_to_remove4, indices_to_remove5 = [], [], [], [], []
+        indices_to_remove1_emb, indices_to_remove2_emb, indices_to_remove3_emb, indices_to_remove4_emb, indices_to_remove5_emb = [], [], [], [], []
+        indices_to_remove1_log, indices_to_remove2_log, indices_to_remove3_log, indices_to_remove4_log, indices_to_remove5_log = [], [], [], [], []
+
         for k in tqdm(range(len(to_save))):
-            sanity_check[questions[k]] = {"f1":[]}
+            sanity_check[questions[k]] = {"f1_le":[], "f2_le":[], "f3_le":[], "f4_le":[], "f5_le":[]}
             for j in range(k+1, len(to_save)):
                 if (len(indices_to_remove1) <= int(len(to_save)*0.1)) and (k not in indices_to_remove1) and (j not in indices_to_remove1) and (result_matrix1[k, j] == 1):
                     indices_to_remove1.append(j)
-                    sanity_check[questions[k]]["f1"].append(questions[j]) 
-
-
-        for k in tqdm(range(len(to_save))):
-            sanity_check[questions[k]]["f2"] = []
-            for j in range(k+1, len(to_save)):
+                    sanity_check[questions[k]]["f1_le"].append(questions[j]) 
+                
                 if (len(indices_to_remove2) <= int(len(to_save)*0.25)) and (k not in indices_to_remove2) and (j not in indices_to_remove2) and (result_matrix2[k, j] == 1):
                     indices_to_remove2.append(j)
-                    sanity_check[questions[k]]["f2"].append(questions[j]) 
+                    sanity_check[questions[k]]["f2_le"].append(questions[j]) 
 
-        for k in tqdm(range(len(to_save))):
-            sanity_check[questions[k]]["f3"] = []
-            for j in range(k+1, len(to_save)):
                 if (len(indices_to_remove3) <= int(len(to_save)*0.5)) and (k not in indices_to_remove3) and (j not in indices_to_remove3) and (result_matrix3[k, j] == 1):
                     indices_to_remove3.append(j)
-                    sanity_check[questions[k]]["f3"].append(questions[j]) 
+                    sanity_check[questions[k]]["f3_le"].append(questions[j]) 
 
-        for k in tqdm(range(len(to_save))):
-            sanity_check[questions[k]]["f4"] = []
-            for j in range(k+1, len(to_save)):
                 if (len(indices_to_remove4) <= int(len(to_save)*0.75)) and (k not in indices_to_remove4) and (j not in indices_to_remove4) and (result_matrix4[k, j] == 1):
                     indices_to_remove4.append(j)
-                    sanity_check[questions[k]]["f4"].append(questions[j]) 
+                    sanity_check[questions[k]]["f4_le"].append(questions[j]) 
 
-        for k in tqdm(range(len(to_save))):
-            sanity_check[questions[k]]["f5"] = []
-            for j in range(k+1, len(to_save)):
                 if (len(indices_to_remove5) <= int(len(to_save)*0.9)) and (k not in indices_to_remove5) and (j not in indices_to_remove5) and (result_matrix5[k, j] == 1):
                     indices_to_remove5.append(j)
-                    sanity_check[questions[k]]["f5"].append(questions[j]) 
+                    sanity_check[questions[k]]["f5_le"].append(questions[j]) 
 
-        indices_to_remove5 = list(set(indices_to_remove5))
-        indices_to_remove4 = list(set(indices_to_remove4))
-        indices_to_remove3 = list(set(indices_to_remove3))
-        indices_to_remove2 = list(set(indices_to_remove2))
-        indices_to_remove1 = list(set(indices_to_remove1))
+        for k in tqdm(range(len(to_save))):
+            sanity_check[questions[k]]["f1_e"], sanity_check[questions[k]]["f2_e"], sanity_check[questions[k]]["f3_e"], sanity_check[questions[k]]["f4_e"], sanity_check[questions[k]]["f5_e"],  = [], [], [], [], []
+            for j in range(k+1, len(to_save)):
+                if (len(indices_to_remove1_emb) <= int(len(to_save)*0.1)) and (k not in indices_to_remove1_emb) and (j not in indices_to_remove1_emb) and (question_similarity_matrix[k, j] > 0.6):
+                    indices_to_remove1_emb.append(j)
+                    sanity_check[questions[k]]["f1_e"].append(questions[j])
 
-        total_score_acc1 = 0
-        total_score_acc_norm1 = 0
-        for k in range(len(to_save)):
-            if k in indices_to_remove1:
-                continue
-            if "acc" in to_save[k].keys():
-                total_score_acc1 += to_save[k]["acc"]
-            if "acc_norm" in to_save[k].keys():
-                total_score_acc_norm1 += to_save[k]["acc_norm"]
+                if (len(indices_to_remove2_emb) <= int(len(to_save)*0.25)) and (k not in indices_to_remove2_emb) and (j not in indices_to_remove2_emb) and (question_similarity_matrix[k, j] > 0.5):
+                    indices_to_remove2_emb.append(j)
+                    sanity_check[questions[k]]["f2_e"].append(questions[j]) 
+
+                if (len(indices_to_remove3_emb) <= int(len(to_save)*0.5)) and (k not in indices_to_remove3_emb) and (j not in indices_to_remove3_emb) and (question_similarity_matrix[k, j] > 0.4):
+                    indices_to_remove3_emb.append(j)
+                    sanity_check[questions[k]]["f3_e"].append(questions[j])
+
+                if (len(indices_to_remove4_emb) <= int(len(to_save)*0.75)) and (k not in indices_to_remove4_emb) and (j not in indices_to_remove4_emb) and (question_similarity_matrix[k, j] > 0.35):
+                    indices_to_remove4_emb.append(j)
+                    sanity_check[questions[k]]["f4_e"].append(questions[j])
+                
+                if (len(indices_to_remove5_emb) <= int(len(to_save)*0.9)) and (k not in indices_to_remove5_emb) and (j not in indices_to_remove5_emb) and (question_similarity_matrix[k, j] > 0.3):
+                    indices_to_remove5_emb.append(j)
+                    sanity_check[questions[k]]["f5_e"].append(questions[j])
+
+        for k in tqdm(range(len(to_save))):
+            sanity_check[questions[k]]["f1_l"], sanity_check[questions[k]]["f2_l"], sanity_check[questions[k]]["f3_l"], sanity_check[questions[k]]["f4_l"], sanity_check[questions[k]]["f5_l"],  = [], [], [], [], []
+            for j in range(k+1, len(to_save)):
+                if (len(indices_to_remove1_log) <= int(len(to_save)*0.1)) and (k not in indices_to_remove1_log) and (j not in indices_to_remove1_log) and (logits_similarity_matrix[k, j] > 0.95):
+                    indices_to_remove1_log.append(j)
+                    sanity_check[questions[k]]["f1_l"].append(questions[j])
+
+                if (len(indices_to_remove2_log) <= int(len(to_save)*0.25)) and (k not in indices_to_remove2_log) and (j not in indices_to_remove2_log) and (logits_similarity_matrix[k, j] > 0.9):
+                    indices_to_remove2_log.append(j)
+                    sanity_check[questions[k]]["f2_l"].append(questions[j]) 
+
+                if (len(indices_to_remove3_log) <= int(len(to_save)*0.5)) and (k not in indices_to_remove3_log) and (j not in indices_to_remove3_log) and (logits_similarity_matrix[k, j] > 0.85):
+                    indices_to_remove3_log.append(j)
+                    sanity_check[questions[k]]["f3_l"].append(questions[j])
+
+                if (len(indices_to_remove4_log) <= int(len(to_save)*0.75)) and (k not in indices_to_remove4_log) and (j not in indices_to_remove4_log) and (logits_similarity_matrix[k, j] > 0.8):
+                    indices_to_remove4_log.append(j)
+                    sanity_check[questions[k]]["f4_l"].append(questions[j])
+                
+                if (len(indices_to_remove5_log) <= int(len(to_save)*0.9)) and (k not in indices_to_remove5_log) and (j not in indices_to_remove5_log) and (logits_similarity_matrix[k, j] > 0.75):
+                    indices_to_remove5_log.append(j)
+                    sanity_check[questions[k]]["f5_l"].append(questions[j])
+
+        indices_to_remove1, indices_to_remove2, indices_to_remove3, indices_to_remove4, indices_to_remove5 = list(set(indices_to_remove1)), list(set(indices_to_remove2)), list(set(indices_to_remove3)), list(set(indices_to_remove4)), list(set(indices_to_remove5))
+        total_score_acc1, total_score_acc2, total_score_acc3, total_score_acc4, total_score_acc5 = sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove1]), sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove2]), sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove3]), sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove4]), sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove5])
+
+        indices_to_remove1_emb, indices_to_remove2_emb, indices_to_remove3_emb, indices_to_remove4_emb, indices_to_remove5_emb = list(set(indices_to_remove1_emb)), list(set(indices_to_remove2_emb)), list(set(indices_to_remove3_emb)), list(set(indices_to_remove4_emb)), list(set(indices_to_remove5_emb))
+        total_score_acc1_emb, total_score_acc2_emb, total_score_acc3_emb, total_score_acc4_emb, total_score_acc5_emb = sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove1_emb]), sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove2_emb]), sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove3_emb]), sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove4_emb]), sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove5_emb])
+
+        indices_to_remove1_log, indices_to_remove2_log, indices_to_remove3_log, indices_to_remove4_log, indices_to_remove5_log = list(set(indices_to_remove1_log)), list(set(indices_to_remove2_log)), list(set(indices_to_remove3_log)), list(set(indices_to_remove4_log)), list(set(indices_to_remove5_log))
+        total_score_acc1_log, total_score_acc2_log, total_score_acc3_log, total_score_acc4_log, total_score_acc5_log = sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove1_log]), sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove2_log]), sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove3_log]), sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove4_log]), sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove5_log])
+
+        total_score_acc1_rand, total_score_acc2_rand, total_score_acc3_rand, total_score_acc4_rand, total_score_acc5_rand = 0, 0, 0, 0, 0
+        for _ in range(5):
+            indices_to_remove1_rand, indices_to_remove2_rand, indices_to_remove3_rand, indices_to_remove4_rand, indices_to_remove5_rand = random.sample(range(len(to_save)), int(len(to_save) * 0.10)), random.sample(range(len(to_save)), int(len(to_save) * 0.25)), random.sample(range(len(to_save)), int(len(to_save) * 0.5)), random.sample(range(len(to_save)), int(len(to_save) * 0.75)), random.sample(range(len(to_save)), int(len(to_save) * 0.9))
+            total_score_acc1_rand += sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove1_rand]) 
+            total_score_acc2_rand += sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove2_rand])
+            total_score_acc3_rand += sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove3_rand])
+            total_score_acc4_rand += sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove4_rand])
+            total_score_acc5_rand += sum([to_save[k]["acc"] for k in range(len(to_save)) if k not in indices_to_remove5_rand])
         
-        total_score_acc2 = 0
-        total_score_acc_norm2 = 0
-        for k in range(len(to_save)):
-            if k in indices_to_remove2:
-                continue
-            if "acc" in to_save[k].keys():
-                total_score_acc2 += to_save[k]["acc"]
-            if "acc_norm" in to_save[k].keys():
-                total_score_acc_norm2 += to_save[k]["acc_norm"]
-
-        total_score_acc3 = 0
-        total_score_acc_norm3 = 0
-        for k in range(len(to_save)):
-            if k in indices_to_remove3:
-                continue
-            if "acc" in to_save[k].keys():
-                total_score_acc3 += to_save[k]["acc"]
-            if "acc_norm" in to_save[k].keys():
-                total_score_acc_norm3 += to_save[k]["acc_norm"]
-
-        total_score_acc4 = 0
-        total_score_acc_norm4 = 0
-        for k in range(len(to_save)):
-            if k in indices_to_remove4:
-                continue
-            if "acc" in to_save[k].keys():
-                total_score_acc4 += to_save[k]["acc"]
-            if "acc_norm" in to_save[k].keys():
-                total_score_acc_norm4 += to_save[k]["acc_norm"]
-
-        total_score_acc5 = 0
-        total_score_acc_norm5 = 0
-        for k in range(len(to_save)):
-            if k in indices_to_remove5:
-                continue
-            if "acc" in to_save[k].keys():
-                total_score_acc5 += to_save[k]["acc"]
-            if "acc_norm" in to_save[k].keys():
-                total_score_acc_norm5 += to_save[k]["acc_norm"]
+        total_score_acc1_rand /= 5
+        total_score_acc2_rand /= 5
+        total_score_acc3_rand /= 5
+        total_score_acc4_rand /= 5
+        total_score_acc5_rand /= 5
 
         if lm.revision == "main":
             print("MODEL: {}".format(lm._config.name_or_path))
         else:
             print("MODEL: {}".format(lm._config.name_or_path.split("/")[-1]+"-"+lm.revision))
-        print("TASK: {}".format(task_output.task.task_name))
-        print("Filter Ratio (1,2,3,4,5):" + str(len(indices_to_remove1)/len(to_save)), str(len(indices_to_remove2)/len(to_save)), str(len(indices_to_remove3)/len(to_save)), str(len(indices_to_remove4)/len(to_save)), str(len(indices_to_remove5)/len(to_save)))
-        print("Filtered Accuracy (1,2,3,4,5):" + str(float(total_score_acc1/(len(to_save)-len(indices_to_remove1)))), str(float(total_score_acc2/(len(to_save)-len(indices_to_remove2)))), str(float(total_score_acc3/(len(to_save)-len(indices_to_remove3)))), str(float(total_score_acc4/(len(to_save)-len(indices_to_remove4)))), str(float(total_score_acc5/(len(to_save)-len(indices_to_remove5)))))
-        print("Filtered Accuracy Normalized (1,2,3,4,5):" + str(float(total_score_acc_norm1/(len(to_save)-len(indices_to_remove1)))), str(float(total_score_acc_norm2/(len(to_save)-len(indices_to_remove2)))), str(float(total_score_acc_norm3/(len(to_save)-len(indices_to_remove3)))), str(float(total_score_acc_norm4/(len(to_save)-len(indices_to_remove4)))), str(float(total_score_acc_norm5/(len(to_save)-len(indices_to_remove5)))))
         
+        print("TASK: {}".format(task_output.task.task_name))
+        
+        print("Filter Ratio LE (1,2,3,4,5):" + str(len(indices_to_remove1)/len(to_save)), str(len(indices_to_remove2)/len(to_save)), str(len(indices_to_remove3)/len(to_save)), str(len(indices_to_remove4)/len(to_save)), str(len(indices_to_remove5)/len(to_save)))
+        print("Filtered Accuracy LE (1,2,3,4,5):" + str(float(total_score_acc1/(len(to_save)-len(indices_to_remove1)))), str(float(total_score_acc2/(len(to_save)-len(indices_to_remove2)))), str(float(total_score_acc3/(len(to_save)-len(indices_to_remove3)))), str(float(total_score_acc4/(len(to_save)-len(indices_to_remove4)))), str(float(total_score_acc5/(len(to_save)-len(indices_to_remove5)))))
+        
+        print("Filter Ratio E (1,2,3,4,5):" + str(len(indices_to_remove1_emb)/len(to_save)), str(len(indices_to_remove2_emb)/len(to_save)), str(len(indices_to_remove3_emb)/len(to_save)), str(len(indices_to_remove4_emb)/len(to_save)), str(len(indices_to_remove5_emb)/len(to_save)))
+        print("Filtered Accuracy E (1,2,3,4,5):" + str(float(total_score_acc1_emb/(len(to_save)-len(indices_to_remove1_emb)))), str(float(total_score_acc2_emb/(len(to_save)-len(indices_to_remove2_emb)))), str(float(total_score_acc3_emb/(len(to_save)-len(indices_to_remove3_emb)))), str(float(total_score_acc4_emb/(len(to_save)-len(indices_to_remove4_emb)))), str(float(total_score_acc5_emb/(len(to_save)-len(indices_to_remove5_emb)))))
+
+        print("Filter Ratio L (1,2,3,4,5):" + str(len(indices_to_remove1_log)/len(to_save)), str(len(indices_to_remove2_log)/len(to_save)), str(len(indices_to_remove3_log)/len(to_save)), str(len(indices_to_remove4_log)/len(to_save)), str(len(indices_to_remove5_log)/len(to_save)))
+        print("Filtered Accuracy L (1,2,3,4,5):" + str(float(total_score_acc1_log/(len(to_save)-len(indices_to_remove1_log)))), str(float(total_score_acc2_log/(len(to_save)-len(indices_to_remove2_log)))), str(float(total_score_acc3_log/(len(to_save)-len(indices_to_remove3_log)))), str(float(total_score_acc4_log/(len(to_save)-len(indices_to_remove4_log)))), str(float(total_score_acc5_log/(len(to_save)-len(indices_to_remove5_log)))))
+       
+
+        print("Filter Ratio R (1,2,3,4,5):" + str(len(indices_to_remove1_rand)/len(to_save)), str(len(indices_to_remove2_rand)/len(to_save)), str(len(indices_to_remove3_rand)/len(to_save)), str(len(indices_to_remove4_rand)/len(to_save)), str(len(indices_to_remove5_rand)/len(to_save)))
+        print("Filtered Accuracy R (1,2,3,4,5):" + str(float(total_score_acc1_rand/(len(to_save)-len(indices_to_remove1_rand)))), str(float(total_score_acc2_rand/(len(to_save)-len(indices_to_remove2_rand)))), str(float(total_score_acc3_rand/(len(to_save)-len(indices_to_remove3_rand)))), str(float(total_score_acc4_rand/(len(to_save)-len(indices_to_remove4_rand)))), str(float(total_score_acc5_rand/(len(to_save)-len(indices_to_remove5_rand)))))
+
         json.dump(sanity_check, f, indent=2, ensure_ascii=False)
-        all_embeddings = [to_save[i]["question_embedding"] for i in range(len(to_save))]
-        all_embeddings_f1 = [to_save[i]["question_embedding"] for i in range(len(to_save)) if i not in indices_to_remove1]
-        all_embeddings_f2 = [to_save[i]["question_embedding"] for i in range(len(to_save)) if i not in indices_to_remove2]
-        all_embeddings_f3 = [to_save[i]["question_embedding"] for i in range(len(to_save)) if i not in indices_to_remove3]
-        all_embeddings_f4 = [to_save[i]["question_embedding"] for i in range(len(to_save)) if i not in indices_to_remove4]
-        all_embeddings_f5 = [to_save[i]["question_embedding"] for i in range(len(to_save)) if i not in indices_to_remove5]
+        all_embeddings = [(questions[i], to_save[i]["question_embedding"]) for i in range(len(to_save))]
+        all_embeddings_f1 = [(questions[i], to_save[i]["question_embedding"]) for i in range(len(to_save)) if i not in indices_to_remove1]
+        all_embeddings_f2 = [(questions[i], to_save[i]["question_embedding"]) for i in range(len(to_save)) if i not in indices_to_remove2]
+        all_embeddings_f3 = [(questions[i], to_save[i]["question_embedding"]) for i in range(len(to_save)) if i not in indices_to_remove3]
+        all_embeddings_f4 = [(questions[i], to_save[i]["question_embedding"]) for i in range(len(to_save)) if i not in indices_to_remove4]
+        all_embeddings_f5 = [(questions[i], to_save[i]["question_embedding"]) for i in range(len(to_save)) if i not in indices_to_remove5]
         
         counter = 0 
         for emb in [all_embeddings, all_embeddings_f1, all_embeddings_f2, all_embeddings_f3, all_embeddings_f4, all_embeddings_f5]:
@@ -776,18 +787,28 @@ def evaluate(
                 if counter in [1, 2, 4]:
                     counter += 1
                     continue
+                
                 if len(emb) > 30:
                     tsne = TSNE(n_components=2, random_state=42, perplexity=30, n_iter=1000)
                 else:
                     tsne = TSNE(n_components=2, random_state=42, perplexity=len(emb), n_iter=1000)
-                emb = torch.tensor(emb).cpu()
+                
+                embeddings = [e[1] for e in emb]
+                questions = [e[0] for e in emb]
+                emb = torch.tensor(embeddings).cpu()
                 data_2d = tsne.fit_transform(emb)
                 k = 5
                 n_clusters = int(len(emb) / k) + 1
                 kmeans = KMeans(n_clusters=n_clusters, random_state=42)
                 kmeans.fit(data_2d.astype(np.float64))
+                
                 labels = kmeans.labels_ 
-
+                cluster_indices = {}
+                for index, label in enumerate(labels):
+                    if label not in cluster_indices.keys():
+                        cluster_indices[float(label)] = []
+                    cluster_indices[float(label)].append(questions[index])
+                
                 x_min, x_max = data_2d[:, 0].min() - 1, data_2d[:, 0].max() + 1
                 y_min, y_max = data_2d[:, 1].min() - 1, data_2d[:, 1].max() + 1
                 xx, yy = np.meshgrid(np.linspace(x_min, x_max, 100), np.linspace(y_min, y_max, 100))
@@ -804,16 +825,20 @@ def evaluate(
                 plt.colorbar(scatter, ticks=range(n_clusters), label='Cluster Label')  # Color bar for cluster labels
                 if lm.revision == "main":
                     plt.savefig("results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"/"+str(counter)+"clustering.png", dpi=300, bbox_inches='tight')
+                    f = open("results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"/"+str(counter)+"clustering.json", "w")
+                    json.dump(cluster_indices, f, ensure_ascii=False, indent=2)
                 else:
                     plt.savefig("results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"-"+lm.revision+"/"+str(counter)+"clustering.png", dpi=300, bbox_inches='tight')
+                    f = open("results/"+task_output.task.task_name+"/"+lm._config.name_or_path.split("/")[-1]+"-"+str(counter)+lm.revision+"/"+"clustering.json", "w")
+                    json.dump(cluster_indices, f, ensure_ascii=False, indent=2)
                 counter += 1
-            except:
+            except ValueError:
                 counter += 1
                 pass
 
         end_time = time.time()
         execution_time = end_time - start_time
-        
+
         if lm.revision == "main":
             print(f'Execution time for {task_output.task.task_name} + {lm._config.name_or_path.split("/")[-1]}: {execution_time:.6f} seconds', flush=True)
         else:
